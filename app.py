@@ -111,6 +111,20 @@ def create_account():
         conn.close()
     return jsonify(account_to_dict(row)), 201
 
+@app.delete("/accounts/<int:account_id>")
+def delete_account(account_id):
+    conn = db.get_connection()
+    try:
+        cur = conn.execute(
+            "DELETE FROM accounts WHERE id = ? AND user_id = ?",
+            (account_id, current_user_id()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    if cur.rowcount == 0:
+        return jsonify(error="Account not found."), 404
+    return "", 204
 
 if __name__ == "__main__":
     app.run(debug=True)
