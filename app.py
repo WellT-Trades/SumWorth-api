@@ -111,6 +111,43 @@ def create_account():
         conn.close()
     return jsonify(account_to_dict(row)), 201
 
+@app.put("/accounts/<int:account_id>")
+def update_account(account_id):
+    data = request.get_json(silent=True) or {}
+    values, error = validate_account(data)
+    if error:
+        return jsonify(error=error), 400
+
+    conn = db.get_connection()
+    try:
+        try:
+            cur = conn.execute(
+                "UPDATE accounts "
+                "SET name = ?, account_number = ?, balance_kobo = ?, updated_at = datetime('now') "
+                "WHERE id = ? AND user_id = ?",
+                (
+                    values["name"],
+                    values["account_number"],
+                    values["balance_kobo"],
+                    account_id,
+                    current_user_id(),
+                ),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            return jsonify(error="You already have an account with this name and number."), 409
+        if cur.rowcount == 0:
+            return jsonify(error="Account not found."), 404
+        row = conn.execute(
+            "SELECT id, name, account_number, balance_kobo FROM accounts WHERE id = ?",
+            (account_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return jsonify(account_to_dict(row))
+
+
+
 @app.delete("/accounts/<int:account_id>")
 def delete_account(account_id):
     conn = db.get_connection()
