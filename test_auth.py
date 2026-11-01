@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import db
@@ -83,6 +84,7 @@ class AuthAndIsolationTests(unittest.TestCase):
         alice = self.signup("alice@example.com")
         self.add_account(alice)
         self.assertEqual(self.add_account(alice, name="OPAY").status_code, 409)
+    
     def login_with(self, email, password):
         return self.client.post("/auth/login", json={"email": email, "password": password})
 
@@ -104,6 +106,55 @@ class AuthAndIsolationTests(unittest.TestCase):
     def test_unknown_email_locks_the_same_way(self):
         codes = [self.login_with("nobody@example.com", "whatever-pass").status_code for _ in range(4)]
         self.assertEqual(codes, [401, 401, 401, 429])
+
+    def request_reset_code(self, email):
+        with mock.patch.object(app_module, "send_reset_code") as fake:
+            self.client.post("/auth/forgot-password", json={"email": email})
+        return fake.call_args[0][1] if fake.called else None
+
+    def reset(self, email, code, new_password="new-password-9"):
+        return self.client.post(
+            "/auth/reset-password",
+            json={"email": email, "code": code, "new_password": new_password},
+        )
+
+    def test_reset_with_correct_code_changes_password(self):
+        self.signup("a@example.com")
+        code = self.request_reset_code("a@example.com")
+        self.assertEqual(self.reset("a@example.com", code).status_code, 200)
+        self.assertEqual(self.login_with("a@example.com", "test-password-1").status_code, 401)
+        self.assertEqual(self.login_with("a@example.com", "new-password-9").status_code, 200)
+
+    def test_wrong_code_dies_after_five_tries(self):
+        self.signup("a@example.com")
+        code = self.request_reset_code("a@example.com")
+        wrong = "000000" if code != "000000" else "111111"
+        for _ in range(5):
+            self.assertEqual(self.reset("a@example.com", wrong).status_code, 400)
+        # The right code no longer works either
+        self.assertEqual(self.reset("a@example.com", code).status_code, 400)
+
+    def test_code_cannot_be_used_twice(self):
+        self.signup("a@example.com")
+        code = self.request_reset_code("a@example.com")
+        self.assertEqual(self.reset("a@example.com", code).status_code, 200)
+        self.assertEqual(self.reset("a@example.com", code, "another-pass-1").status_code, 400)
+
+    def test_expired_code_is_refused(self):
+        self.signup("a@example.com")
+        code = self.request_reset_code("a@example.com")
+        conn = db.get_connection()
+        conn.execute("UPDATE password_resets SET expires_at = 1")
+        conn.commit()
+        conn.close()
+        self.assertEqual(self.reset("a@example.com", code).status_code, 400)
+
+    def test_unknown_email_gets_the_same_reply_and_no_code(self):
+        self.signup("a@example.com")
+        known = self.client.post("/auth/forgot-password", json={"email": "a@example.com"})
+        unknown = self.client.post("/auth/forgot-password", json={"email": "nobody@example.com"})
+        self.assertEqual(known.get_json(), unknown.get_json())
+        self.assertIsNone(self.request_reset_code("nobody@example.com"))
 
 if __name__ == "__main__":
     unittest.main()
