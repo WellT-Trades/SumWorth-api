@@ -1,3 +1,6 @@
+import smtplib
+import ssl
+from email.message import EmailMessage
 import math
 import time
 import re
@@ -324,9 +327,49 @@ RESET_MINUTES = 15
 RESET_MAX_TRIES = 5
 
 
+def load_mail_config():
+    path = Path(__file__).parent / "mail.cfg"
+    if not path.exists():
+        return None
+    config = {}
+    for line in path.read_text().splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            config[key.strip()] = value.strip()
+    if config.get("sender") and config.get("app_password"):
+        return config
+    return None
+
+
 def send_reset_code(email, code):
-    # DEV ONLY: prints the code. Replace with a real email sender before launch.
-    print(f"[DEV ONLY] Password reset code for {email}: {code}", flush=True)
+    config = load_mail_config()
+    if config is None:
+        # No mail set up: print the code so development still works.
+        print(f"[DEV ONLY] Password reset code for {email}: {code}", flush=True)
+        return
+
+    message = EmailMessage()
+    message["Subject"] = "Your SumWorth password reset code"
+    message["From"] = f"SumWorth <{config['sender']}>"
+    message["To"] = email
+    message.set_content(
+        f"Your SumWorth password reset code is {code}.\n\n"
+        f"It works for {RESET_MINUTES} minutes and can be used once.\n"
+        "If you didn't ask for this, you can ignore this email."
+    )
+
+    try:
+        with smtplib.SMTP_SSL(
+            "smtp.gmail.com",
+            465,
+            context=ssl.create_default_context(),
+            timeout=10,
+        ) as server:
+            server.login(config["sender"], config["app_password"])
+            server.send_message(message)
+    except Exception as e:
+        # Never show the user (or log) the code. Just note that sending failed.
+        print(f"[MAIL ERROR] could not send reset email: {e}", flush=True)
 
 
 def invalid_code():
