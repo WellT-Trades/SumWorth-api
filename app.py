@@ -28,8 +28,8 @@ serializer = URLSafeTimedSerializer(load_secret_key(), salt="sumworth-auth")
 TOKEN_MAX_AGE = 60 * 60 * 24 * 7  # 7 days, in seconds
 
 
-def make_token(user_id):
-    return serializer.dumps({"uid": user_id})
+def make_token(user_id, version):
+    return serializer.dumps({"uid": user_id, "ver": version})
 
 
 def require_auth(view):
@@ -46,6 +46,18 @@ def require_auth(view):
             return jsonify(error="Session expired. Please log in again."), 401
         except BadSignature:
             return jsonify(error="Invalid token."), 401
+
+        conn = db.get_connection()
+        try:
+            user = conn.execute(
+                "SELECT token_version FROM users WHERE id = ?",
+                (payload.get("uid"),),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if user is None or user["token_version"] != payload.get("ver"):
+            return jsonify(error="Session expired. Please log in again."), 401
 
         g.user_id = payload["uid"]
         return view(*args, **kwargs)
@@ -286,8 +298,8 @@ def login():
             return too_many(wait)
 
         row = conn.execute(
-            "SELECT id, email, password_hash FROM users WHERE email = ?",
-            (email,),
+            "SELECT id, email, password_hash, token_version FROM users WHERE email = ?",
+                (email,),
         ).fetchone()
 
         stored_hash = row["password_hash"] if row else DUMMY_HASH
@@ -304,7 +316,7 @@ def login():
         conn.close()
 
     return jsonify(
-        token=make_token(row["id"]),
+        token=make_token(row["id"], row["token_version"]),
         user={"id": row["id"], "email": row["email"]},
     )
 
@@ -394,7 +406,8 @@ def reset_password():
             return invalid_code()
 
         conn.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
+            "UPDATE users SET password_hash = ?, token_version = token_version + 1 "
+            "WHERE id = ?",
             (generate_password_hash(new_password), row["uid"]),
         )
         conn.execute("DELETE FROM password_resets WHERE user_id = ?", (row["uid"],))
