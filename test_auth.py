@@ -18,6 +18,9 @@ class AuthAndIsolationTests(unittest.TestCase):
         db.DB_PATH.unlink(missing_ok=True)
         db.init_db()
         self.client = app_module.app.test_client()
+        patcher = mock.patch.object(app_module, "send_reset_code")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     # --- helpers -------------------------------------------------------
     def signup(self, email):
