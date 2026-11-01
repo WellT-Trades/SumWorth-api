@@ -1,3 +1,5 @@
+import math
+import time
 import re
 import secrets
 import sqlite3
@@ -218,6 +220,54 @@ def register():
 
     return jsonify(id=cur.lastrowid, email=email), 201
 
+MAX_ATTEMPTS = 4
+LOCK_SECONDS = 15 * 60
+
+# Used so a login for an unknown email takes as long as a real one.
+DUMMY_HASH = generate_password_hash("not-a-real-password")
+
+
+def lock_seconds_left(conn, email):
+    row = conn.execute(
+        "SELECT locked_until FROM login_attempts WHERE email = ?", (email,)
+    ).fetchone()
+    if row is None:
+        return 0
+    return max(0, row["locked_until"] - int(time.time()))
+
+
+def record_failure(conn, email):
+    """Count a failed login. Returns the attempts left (0 means now locked)."""
+    now = int(time.time())
+    row = conn.execute(
+        "SELECT failed_count, last_failed FROM login_attempts WHERE email = ?",
+        (email,),
+    ).fetchone()
+
+    if row is None or now - row["last_failed"] >= LOCK_SECONDS:
+        count = 1
+    else:
+        count = row["failed_count"] + 1
+
+    locked_until = now + LOCK_SECONDS if count >= MAX_ATTEMPTS else 0
+    conn.execute(
+        "INSERT OR REPLACE INTO login_attempts "
+        "(email, failed_count, last_failed, locked_until) VALUES (?, ?, ?, ?)",
+        (email, count, now, locked_until),
+    )
+    conn.commit()
+    return max(0, MAX_ATTEMPTS - count)
+
+
+def clear_failures(conn, email):
+    conn.execute("DELETE FROM login_attempts WHERE email = ?", (email,))
+    conn.commit()
+
+
+def too_many(seconds):
+    minutes = max(1, math.ceil(seconds / 60))
+    return jsonify(error=f"Too many attempts. Try again in {minutes} minute(s)."), 429
+
 @app.post("/auth/login")
 def login():
     data = request.get_json(silent=True) or {}
@@ -227,17 +277,31 @@ def login():
     if not isinstance(email, str) or not isinstance(password, str):
         return jsonify(error="Please enter your email and password."), 400
 
+    email = email.strip().lower()
+
     conn = db.get_connection()
     try:
+        wait = lock_seconds_left(conn, email)
+        if wait:
+            return too_many(wait)
+
         row = conn.execute(
             "SELECT id, email, password_hash FROM users WHERE email = ?",
-            (email.strip().lower(),),
+            (email,),
         ).fetchone()
+
+        stored_hash = row["password_hash"] if row else DUMMY_HASH
+        password_ok = check_password_hash(stored_hash, password)
+
+        if row is None or not password_ok:
+            left = record_failure(conn, email)
+            if left == 0:
+                return too_many(LOCK_SECONDS)
+            return jsonify(error=f"Wrong email or password. {left} attempt(s) left."), 401
+
+        clear_failures(conn, email)
     finally:
         conn.close()
-
-    if row is None or not check_password_hash(row["password_hash"], password):
-        return jsonify(error="Wrong email or password."), 401
 
     return jsonify(
         token=make_token(row["id"]),
