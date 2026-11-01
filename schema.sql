@@ -23,3 +23,9 @@ CREATE TABLE IF NOT EXISTS login_attempts (
     last_failed  INTEGER NOT NULL DEFAULT 0,
     locked_until INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS password_resets (
+    user_id    INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    code_hash  TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    tries      INTEGER NOT NULL DEFAULT 0
+);
