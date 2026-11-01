@@ -307,5 +307,102 @@ def login():
         token=make_token(row["id"]),
         user={"id": row["id"], "email": row["email"]},
     )
+
+RESET_MINUTES = 15
+RESET_MAX_TRIES = 5
+
+
+def send_reset_code(email, code):
+    # DEV ONLY: prints the code. Replace with a real email sender before launch.
+    print(f"[DEV ONLY] Password reset code for {email}: {code}", flush=True)
+
+
+def invalid_code():
+    return jsonify(error="Invalid or expired code."), 400
+
+
+@app.post("/auth/forgot-password")
+def forgot_password():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    if not isinstance(email, str) or not email.strip():
+        return jsonify(error="Please enter your email."), 400
+    email = email.strip().lower()
+
+    # Always do the same work, so an unknown email isn't faster to answer.
+    code = f"{secrets.randbelow(10**6):06d}"
+    code_hash = generate_password_hash(code)
+
+    conn = db.get_connection()
+    try:
+        user = conn.execute(
+            "SELECT id FROM users WHERE email = ?", (email,)
+        ).fetchone()
+        if user:
+            conn.execute(
+                "INSERT OR REPLACE INTO password_resets "
+                "(user_id, code_hash, expires_at, tries) VALUES (?, ?, ?, 0)",
+                (user["id"], code_hash, int(time.time()) + RESET_MINUTES * 60),
+            )
+            conn.commit()
+            send_reset_code(email, code)
+    finally:
+        conn.close()
+
+    return jsonify(message="If that email is registered, a reset code has been sent.")
+
+
+@app.post("/auth/reset-password")
+def reset_password():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    code = data.get("code")
+    new_password = data.get("new_password")
+
+    if not all(isinstance(v, str) for v in (email, code, new_password)):
+        return jsonify(error="Please fill in every field."), 400
+    if not 8 <= len(new_password) <= 128:
+        return jsonify(error="Password must be 8 to 128 characters."), 400
+    email = email.strip().lower()
+
+    conn = db.get_connection()
+    try:
+        row = conn.execute(
+            "SELECT u.id AS uid, r.code_hash, r.expires_at, r.tries "
+            "FROM users u JOIN password_resets r ON r.user_id = u.id "
+            "WHERE u.email = ?",
+            (email,),
+        ).fetchone()
+
+        # Check against a dummy hash when there's no row, so timing stays the same.
+        stored = row["code_hash"] if row else DUMMY_HASH
+        code_ok = check_password_hash(stored, code.strip())
+
+        if (
+            row is None
+            or row["expires_at"] < int(time.time())
+            or row["tries"] >= RESET_MAX_TRIES
+        ):
+            return invalid_code()
+
+        if not code_ok:
+            conn.execute(
+                "UPDATE password_resets SET tries = tries + 1 WHERE user_id = ?",
+                (row["uid"],),
+            )
+            conn.commit()
+            return invalid_code()
+
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (generate_password_hash(new_password), row["uid"]),
+        )
+        conn.execute("DELETE FROM password_resets WHERE user_id = ?", (row["uid"],))
+        conn.commit()
+        clear_failures(conn, email)
+    finally:
+        conn.close()
+
+    return jsonify(message="Password updated. Please log in.")
 if __name__ == "__main__":
     app.run(debug=True)
