@@ -13,23 +13,8 @@ app = Flask(__name__)
 
 db.init_db()
 
-# TEMPORARY: stands in for real login until Phase 4.
-DEV_USER_ID = 1
 
 
-def ensure_dev_user():
-    conn = db.get_connection()
-    try:
-        conn.execute(
-            "INSERT OR IGNORE INTO users (id, email, password_hash) VALUES (?, ?, ?)",
-            (DEV_USER_ID, "dev@sumworth.local", "not-a-real-hash"),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-ensure_dev_user()
 def load_secret_key():
     path = Path(__file__).parent / "secret.key"
     if not path.exists():
