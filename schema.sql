@@ -17,3 +17,9 @@ CREATE TABLE IF NOT EXISTS accounts (
 
 CREATE UNIQUE INDEX IF NOT EXISTS accounts_unique_per_user
     ON accounts (user_id, name COLLATE NOCASE, account_number);
+CREATE TABLE IF NOT EXISTS login_attempts (
+    email        TEXT PRIMARY KEY,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    last_failed  INTEGER NOT NULL DEFAULT 0,
+    locked_until INTEGER NOT NULL DEFAULT 0
+);
