@@ -83,7 +83,27 @@ class AuthAndIsolationTests(unittest.TestCase):
         alice = self.signup("alice@example.com")
         self.add_account(alice)
         self.assertEqual(self.add_account(alice, name="OPAY").status_code, 409)
+    def login_with(self, email, password):
+        return self.client.post("/auth/login", json={"email": email, "password": password})
 
+    def test_four_wrong_passwords_lock_the_account(self):
+        self.signup("a@example.com")
+        codes = [self.login_with("a@example.com", "wrong-password").status_code for _ in range(4)]
+        self.assertEqual(codes, [401, 401, 401, 429])
+        # Even the correct password is refused while locked
+        self.assertEqual(self.login_with("a@example.com", "test-password-1").status_code, 429)
+
+    def test_successful_login_resets_the_counter(self):
+        self.signup("a@example.com")
+        for _ in range(3):
+            self.login_with("a@example.com", "wrong-password")
+        self.assertEqual(self.login_with("a@example.com", "test-password-1").status_code, 200)
+        codes = [self.login_with("a@example.com", "wrong-password").status_code for _ in range(3)]
+        self.assertEqual(codes, [401, 401, 401])
+
+    def test_unknown_email_locks_the_same_way(self):
+        codes = [self.login_with("nobody@example.com", "whatever-pass").status_code for _ in range(4)]
+        self.assertEqual(codes, [401, 401, 401, 429])
 
 if __name__ == "__main__":
     unittest.main()
