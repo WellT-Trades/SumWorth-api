@@ -155,6 +155,13 @@ class AuthAndIsolationTests(unittest.TestCase):
         unknown = self.client.post("/auth/forgot-password", json={"email": "nobody@example.com"})
         self.assertEqual(known.get_json(), unknown.get_json())
         self.assertIsNone(self.request_reset_code("nobody@example.com"))
+    
+    def test_password_reset_cancels_old_tokens(self):
+        old = self.signup("a@example.com")
+        self.assertEqual(self.client.get("/accounts", headers=old).status_code, 200)
+        code = self.request_reset_code("a@example.com")
+        self.reset("a@example.com", code)
+        self.assertEqual(self.client.get("/accounts", headers=old).status_code, 401)
 
 if __name__ == "__main__":
     unittest.main()
